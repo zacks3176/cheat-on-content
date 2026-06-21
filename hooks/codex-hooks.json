@@ -1,0 +1,63 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__CHEAT_PROJECT_DIR__/.cheat-hooks/codex-hook.js\" immutability",
+            "commandWindows": "node \"__CHEAT_PROJECT_DIR__/.cheat-hooks/codex-hook.js\" immutability",
+            "timeout": 3,
+            "statusMessage": "Checking prediction immutability"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__CHEAT_PROJECT_DIR__/.cheat-hooks/codex-hook.js\" session-start",
+            "commandWindows": "node \"__CHEAT_PROJECT_DIR__/.cheat-hooks/codex-hook.js\" session-start",
+            "timeout": 5,
+            "statusMessage": "Loading cheat-on-content status"
+          },
+          {
+            "type": "command",
+            "command": "node \"__CHEAT_PROJECT_DIR__/.cheat-hooks/codex-hook.js\" log",
+            "commandWindows": "node \"__CHEAT_PROJECT_DIR__/.cheat-hooks/codex-hook.js\" log",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__CHEAT_PROJECT_DIR__/.cheat-hooks/codex-hook.js\" log",
+            "commandWindows": "node \"__CHEAT_PROJECT_DIR__/.cheat-hooks/codex-hook.js\" log",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"__CHEAT_PROJECT_DIR__/.cheat-hooks/codex-hook.js\" log",
+            "commandWindows": "node \"__CHEAT_PROJECT_DIR__/.cheat-hooks/codex-hook.js\" log",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

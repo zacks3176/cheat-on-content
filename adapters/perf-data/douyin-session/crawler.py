@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 from playwright.async_api import BrowserContext, Page, Response, async_playwright
 from paths import auth_dir, debug_dir
@@ -95,8 +97,12 @@ async def fetch_recent_videos(sess: Session, limit: int = 50) -> list[dict]:
         await asyncio.sleep(8)
         # 翻页加载更多
         for _ in range(3):
-            await page.evaluate("window.scrollBy(0, 1200)")
-            await asyncio.sleep(1.5)
+            try:
+                await page.evaluate("window.scrollBy(0, 1200)")
+                await asyncio.sleep(1.5)
+            except Exception as e:
+                print(f"[警告] 视频列表滚动失败，使用已抓到的数据继续: {e}")
+                break
         videos = _parse_video_list(captured, limit)
         if not videos:
             debug_path = debug_dir()
@@ -137,12 +143,12 @@ def _parse_video_list(captured: list[dict], limit: int) -> list[dict]:
 
 
 def _pick(primary: dict, fallback: dict, key: str, default=0):
-    v = primary.get(key)
-    if v is not None:
-        return v
-    v = fallback.get(key)
-    if v is not None:
-        return v
+    value = primary.get(key)
+    if value is not None:
+        return value
+    value = fallback.get(key)
+    if value is not None:
+        return value
     return default
 
 
@@ -164,36 +170,118 @@ def _normalize_video(v: dict) -> dict:
     }
 
 
-async def fetch_video_detail(sess: Session, aweme_id: str) -> dict:
+async def fetch_video_detail(sess: Session, aweme_id: str, deep: bool = False) -> dict:
     """视频数据分析页（完播、转粉等）。"""
     captured: list[dict] = []
     all_urls: list[str] = []
+    buckets: dict[str, list[dict]] = {
+        "metrics": [],
+        "compare": [],
+        "trends": [],
+        "traffic": [],
+        "audience": [],
+        "diagnosis": [],
+        "other": [],
+    }
 
     page = await sess.ctx.new_page()
+
+    def classify_url(url: str) -> str:
+        lower = url.lower()
+        if "/web/api/creator/item/mget" in lower:
+            return "metrics"
+        if "item_compare" in lower:
+            return "compare"
+        if "metrics_trend" in lower:
+            return "trends"
+        if any(k in lower for k in ("traffic", "source", "flow", "origin")):
+            return "traffic"
+        if any(k in lower for k in ("audience", "portrait", "follower/portrait", "fans")):
+            return "audience"
+        if any(k in lower for k in ("diagnose", "diagnosis", "analysis")):
+            return "diagnosis"
+        return "other"
+
+    def extract_query(url: str) -> dict[str, str]:
+        parsed = urlparse(url)
+        query = parse_qs(parsed.query)
+        return {key: values[-1] for key, values in query.items() if values}
 
     async def on_response(resp: Response) -> None:
         all_urls.append(resp.url)
         if any(k in resp.url for k in (
             "data_center", "data_external", "aweme_statistic",
             "item_detail", "statistics", "/data/",
+            "/web/api/creator/item/mget",
+            "/janus/douyin/creator/data/diagnose/item_compare",
+            "/janus/douyin/creator/data/item_analysis/metrics_trend",
         )):
             try:
                 data = await resp.json()
-                captured.append({"url": resp.url, "data": data})
+                record = {
+                    "url": resp.url,
+                    "path": urlparse(resp.url).path,
+                    "query": extract_query(resp.url),
+                    "data": data,
+                }
+                captured.append(record)
+                buckets[classify_url(resp.url)].append(record)
             except Exception:
                 pass
 
     page.on("response", on_response)
     try:
-        url = f"https://creator.douyin.com/creator-micro/data/following/media?item_id={aweme_id}"
+        url = f"https://creator.douyin.com/creator-micro/work-management/work-detail/{aweme_id}?enter_from=content"
         await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-        await asyncio.sleep(6)
+        await asyncio.sleep(8 if not deep else 12)
+
+        if deep:
+            metric_labels = ("播放量", "点赞量", "评论量", "分享量", "收藏量", "弹幕量", "完播率", "2s跳出率")
+            trend_type_labels = ("新增", "累计")
+            time_unit_labels = ("每小时", "每天")
+        else:
+            metric_labels = ("播放量",)
+            trend_type_labels = ("新增",)
+            time_unit_labels = ("每小时",)
+
+        for trend_type in trend_type_labels:
+            try:
+                await page.get_by_text(trend_type, exact=True).click(timeout=1500)
+                await asyncio.sleep(0.4)
+            except Exception:
+                pass
+            for time_unit in time_unit_labels:
+                try:
+                    await page.get_by_text(time_unit, exact=True).click(timeout=1500)
+                    await asyncio.sleep(0.4)
+                except Exception:
+                    pass
+                for metric_label in metric_labels:
+                    try:
+                        await page.get_by_text(metric_label, exact=True).first.click(timeout=1500)
+                        await asyncio.sleep(0.5)
+                    except Exception:
+                        pass
+
+        # The work detail page exposes extra tabs such as traffic, audience, and
+        # comment keywords. Light mode keeps only the tabs that usually move
+        # prediction calibration; deep mode also gathers diagnosis/comment tabs.
+        tab_labels = ("流量分析", "观众分析", "总览")
+        if deep:
+            tab_labels = ("流量分析", "观众分析", "评论热词", "总览")
+        for label in tab_labels:
+            try:
+                await page.get_by_text(label, exact=True).click(timeout=3000)
+                await asyncio.sleep(4)
+            except Exception:
+                pass
+
         if not captured:
             debug_path = debug_dir()
             debug_path.mkdir(parents=True, exist_ok=True)
             (debug_path / "detail_urls.txt").write_text("\n".join(all_urls), encoding="utf-8")
             print("[诊断] 详细数据接口没拦到，已 dump URL 列表。")
-        return {"captured": captured}
+        return {"mode": "deep" if deep else "light", "captured": captured, "buckets": buckets, "urls": all_urls}
     finally:
         await page.close()
 
@@ -386,7 +474,7 @@ def _normalize_comment(c: dict) -> dict:
     }
 
 
-async def fetch_all(aweme_id: str) -> dict:
+async def fetch_all(aweme_id: str, deep: bool = False) -> dict:
     """一个会话跑完视频列表 + 详细数据 + 评论。"""
     sess = await Session.open()
     try:
@@ -400,7 +488,7 @@ async def fetch_all(aweme_id: str) -> dict:
             print(f"       ✓ {video.get('desc', '')[:40]}")
 
         print("  → 打开数据分析页")
-        detail = await fetch_video_detail(sess, aweme_id)
+        detail = await fetch_video_detail(sess, aweme_id, deep=deep)
 
         print("  → 打开前台视频页抓评论")
         comments = await fetch_comments(sess, aweme_id, max_pages=60)
@@ -411,5 +499,33 @@ async def fetch_all(aweme_id: str) -> dict:
         await sess.close()
 
 
+async def list_recent(limit: int = 20) -> int:
+    sess = await Session.open()
+    try:
+        videos = await fetch_recent_videos(sess, limit=limit)
+        if not videos:
+            print("[list] 没抓到视频列表。可能未进入创作者中心、登录态失效，或抖音接口字段已变化。")
+            return 1
+        for i, video in enumerate(videos, 1):
+            title = (video.get("desc") or "").replace("\n", " ")[:60]
+            aweme_id = video.get("aweme_id") or ""
+            publish_time = video.get("create_time") or ""
+            print(f"{i}. {aweme_id} {publish_time} {title}")
+        return 0
+    finally:
+        await sess.close()
+
+
+async def main(argv: list[str]) -> int:
+    cmd = argv[1] if len(argv) > 1 else "login"
+    if cmd == "login":
+        return 0 if await ensure_login() else 1
+    if cmd == "list":
+        limit = int(argv[2]) if len(argv) > 2 else 20
+        return await list_recent(limit)
+    print("Usage: python crawler.py [login|list [limit]]", file=sys.stderr)
+    return 2
+
+
 if __name__ == "__main__":
-    asyncio.run(ensure_login())
+    raise SystemExit(asyncio.run(main(sys.argv)))
