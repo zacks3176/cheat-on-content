@@ -397,10 +397,13 @@ c) 不找 → state 标 `benchmark_status: none`，用通用 v0 起步
 5. **`WORKFLOW.md`** + **`STATUS.md`**
    - 复制 templates/ 对应文件
 
-6. **如果 Q5=是 → 按当前 agent 安装 hooks**
-   - Codex：复制 `hooks/codex-hooks.json` → `.codex/hooks.json`，把其中 `__CHEAT_PROJECT_DIR__` 替换成 JSON 转义后的项目绝对路径；复制 `hooks/codex-hook.js` → `.cheat-hooks/codex-hook.js`
-   - Claude Code：读 `.claude/settings.json`（如不存在则创建空 `{}`），merge 三份原有 hook JSON，并复制三个 `.sh` 脚本到 `.cheat-hooks/`
-   - 不要在 Codex 安装 Claude 配置，也不要在 Claude Code 安装 Codex 配置
+6. **如果 Q5=是 → 安装 hooks**
+   - 读 `.claude/settings.json`（如不存在则创建空 `{}`）
+   - merge 进 `hooks/prediction-immutability.json` 的 `hooks.PreToolUse`
+   - merge 进 `hooks/session-start.json` 的 `hooks.SessionStart`
+   - merge 进 `hooks/meta-logging.json` 的 hooks（如同时启用）
+   - 复制 `prediction-immutability.sh` + `session-start.sh` + `log-event.sh` 到 `.cheat-hooks/`，chmod +x
+   - settings.json 里的 command 路径用 `${CLAUDE_PROJECT_DIR}/.cheat-hooks/`
 
 7. **(Pool 选项 c—Notion)** 仅记录到 state file 的 `pool_status: notion`，后续 cheat-trends 调用时再处理
 
@@ -435,9 +438,9 @@ import 完成后：
 2. 尝试 Edit 这个文件的 `## 预测` 段
 3. 钩子应 exit 1 阻塞 → 报告"✅ immutability 钩子生效"
 4. 删除测试文件
-5. SessionStart hook 验证：Codex 调 `node .cheat-hooks/codex-hook.js session-start`；Claude Code 调 `bash .cheat-hooks/session-start.sh`
+5. SessionStart hook 验证：直接调一次 `bash .cheat-hooks/session-start.sh` → 应输出报告（即使是空的也行）
 
-如果钩子未生效 → **不要假装成功**。Codex 提示用户用 `/hooks` 审核并信任新 hook 后重启；Claude Code 提示检查 `.claude/settings.json` 后重启。
+如果钩子未生效 → **不要假装成功**，明确告诉用户："钩子安装失败，可能是 .claude/settings.json 配置没生效。建议手动检查或重启 Claude Code。"
 
 ### Phase 4.5: 如 Phase 2.5 选 a → dispatch 到 /cheat-learn-from
 
